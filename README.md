@@ -100,11 +100,10 @@ It will automatically appear in any layout browser that enumerates the registry.
 
 ## Tested on
 
-- Delphi 12 Sydney or later (inline variable declarations)
+- Delphi 12
 - Windows 11
 
 ## Should work on
-- Delphi 10.4+
 - Any POSIX terminal 
 
 ## Author
