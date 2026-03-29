@@ -821,16 +821,27 @@ end;
 
 function TListBox.HitTest(ACol, ARow: Integer): Integer;
 var
-  RelRow, RelCol, ColW, C, R, Idx: Integer;
+  RelRow, RelCol, ColW, C, R, Idx, MaxRow: Integer;
 begin
   Result := -1;
-  if (ARow < FTop) or (ARow >= FTop + VisibleRows) then Exit;
+  if Length(FItems) = 0 then Exit;
+
+  // Clamp visible area to actual row count
+  MaxRow := RowCount - FTopIndex;
+  if MaxRow > VisibleRows then
+    MaxRow := VisibleRows;
+
+  if (ARow < FTop) or (ARow >= FTop + MaxRow) then Exit;
   if (ACol < FLeft) or (ACol >= FLeft + FWidth) then Exit;
 
   RelRow := ARow - FTop;
   RelCol := ACol - FLeft;
   ColW := FWidth div FColumns;
+
   C := RelCol div ColW;
+  if C >= FColumns then
+    C := FColumns - 1;
+
   R := FTopIndex + RelRow;
   Idx := R * FColumns + C;
 
