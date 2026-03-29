@@ -106,6 +106,7 @@ var
   NumRead: DWORD;
   Evt: TMouseEvent;
   WheelDelta: SmallInt;
+  Info: TConsoleScreenBufferInfo;
 begin
   Result := KEY_NONE;
   repeat
@@ -153,8 +154,12 @@ begin
       case Buf.Event.MouseEvent.dwEventFlags of
         0: // button press or release
         begin
-          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X + 1;
-          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y + 1;
+          // dwMousePosition is buffer-relative (0-based) but ANSI cursor
+          // positioning is viewport-relative (1-based).  Subtract the
+          // viewport origin so mouse coordinates match PrintAt/MoveTo.
+          GetConsoleScreenBufferInfo(FStdOut, Info);
+          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X - Info.srWindow.Left + 1;
+          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y - Info.srWindow.Top  + 1;
           if Buf.Event.MouseEvent.dwButtonState and FROM_LEFT_1ST_BUTTON_PRESSED_ <> 0 then
           begin
             Evt.Button  := mbLeft;
@@ -175,8 +180,9 @@ begin
         end;
         MOUSE_WHEELED_:
         begin
-          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X + 1;
-          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y + 1;
+          GetConsoleScreenBufferInfo(FStdOut, Info);
+          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X - Info.srWindow.Left + 1;
+          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y - Info.srWindow.Top  + 1;
           WheelDelta := SmallInt(Buf.Event.MouseEvent.dwButtonState shr 16);
           if WheelDelta > 0 then
             Evt.Button := mbWheelUp
