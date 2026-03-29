@@ -59,6 +59,19 @@ type
     Cross: Char;
   end;
 
+  // ── Mouse cursor shape ──────────────────────────────────────────────────
+  TConsoleCursor = (crDefault, crPointer, crBusy);
+
+  // ── Mouse event ─────────────────────────────────────────────────────────
+  TMouseButton = (mbLeft, mbMiddle, mbRight, mbWheelUp, mbWheelDown, mbNone);
+
+  TMouseEvent = record
+    Button:  TMouseButton;
+    Col:     Integer;       // 1-based screen column
+    Row:     Integer;       // 1-based screen row
+    Pressed: Boolean;       // True = press, False = release
+  end;
+
   // ── Menu item for simple selection lists ──────────────────────────────────
   TMenuItem = record
     Key:   Char;
@@ -88,12 +101,20 @@ type
   // ── Abstract console base ───────────────────────────────────────────────
   //   Concrete layouts live in AR.Console.Layouts.
   TConsoleBase = class abstract
-  private
-    FLayout: TConsoleLayout;
-  protected
-    FInitialised: Boolean;
-    FWidth:  Integer;
-    FHeight: Integer;
+  strict private
+    FLayout:       TConsoleLayout;
+    FMouseEnabled: Boolean;
+    FInitialised:  Boolean;
+    FWidth:        Integer;
+    FHeight:       Integer;
+    FMouseEvent:   TMouseEvent;
+  strict protected
+    // Descendants use these instead of touching the fields directly.
+    property Initialised:  Boolean      read FInitialised  write FInitialised;
+    property ScreenWidth:  Integer      read FWidth        write FWidth;
+    property ScreenHeight: Integer      read FHeight       write FHeight;
+    property MouseState:   TMouseEvent  read FMouseEvent   write FMouseEvent;
+    property MouseActive:  Boolean      read FMouseEnabled;
 
     // {platform} — subclasses must implement these
     procedure PlatformInit; virtual; abstract;
@@ -101,6 +122,8 @@ type
     procedure PlatformDetectSize; virtual; abstract;
     function  PlatformReadKeyCode: Word; virtual; abstract;
     function  PlatformKeyPressed: Boolean; virtual; abstract;
+    procedure PlatformEnableMouse; virtual;
+    procedure PlatformDisableMouse; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -128,8 +151,8 @@ type
     procedure MoveTo(ACol, ARow: Integer);
     procedure HideCursor;
     procedure ShowCursor;
-    function  Width: Integer;
-    function  Height: Integer;
+    property  Width: Integer read FWidth write FWidth;
+    property  Height: Integer read FHeight write FHeight;
     procedure RefreshSize;
 
     // ── Output ────────────────────────────────────────────────────────────
@@ -152,6 +175,13 @@ type
     function  ReadLine: string; overload;
     function  ReadLine(out AExitKey: Word): string; overload;
     function  KeyPressed: Boolean;
+
+    // ── Mouse ───────────────────────────────────────────────────────────
+    procedure EnableMouse;
+    procedure DisableMouse;
+    procedure SetMouseCursor(ACursor: TConsoleCursor);
+    property  MouseEvent: TMouseEvent read FMouseEvent write FMouseEvent;
+    property  MouseEnabled: Boolean read FMouseEnabled;
 
     // ── High-level: menu ──────────────────────────────────────────────────
     function ShowMenu(ALeft, ATop: Integer;
@@ -193,6 +223,8 @@ const
   KEY_F10       = $F019;
   KEY_F11       = $F01A;
   KEY_F12       = $F01B;
+
+  KEY_MOUSE     = $F020;  // Mouse event — read MouseEvent property for details
 
 // ── Box-character constants ─────────────────────────────────────────────────
 const
@@ -292,10 +324,54 @@ end;
 procedure TConsoleBase.Shutdown;
 begin
   if not FInitialised then Exit;
+  if FMouseEnabled then
+    DisableMouse;
   ResetColor;
   ShowCursor;
   PlatformShutdown;
   FInitialised := False;
+end;
+
+procedure TConsoleBase.EnableMouse;
+begin
+  if not FMouseEnabled then
+  begin
+    PlatformEnableMouse;
+    FMouseEnabled := True;
+  end;
+end;
+
+procedure TConsoleBase.DisableMouse;
+begin
+  if FMouseEnabled then
+  begin
+    SetMouseCursor(crDefault);
+    PlatformDisableMouse;
+    FMouseEnabled := False;
+  end;
+end;
+
+procedure TConsoleBase.PlatformEnableMouse;
+begin
+  // Override in platform subclass
+end;
+
+procedure TConsoleBase.PlatformDisableMouse;
+begin
+  // Override in platform subclass
+end;
+
+procedure TConsoleBase.SetMouseCursor(ACursor: TConsoleCursor);
+const
+  // OSC 22 cursor names — supported by modern terminals
+  // (xterm, Windows Terminal, kitty, foot, iTerm2)
+  CURSOR_NAMES: array[TConsoleCursor] of string = (
+    'default',   // crDefault — normal arrow
+    'pointer',   // crPointer — hand / link cursor
+    'wait'       // crBusy    — hourglass / spinner
+  );
+begin
+  System.Write(ESC + ']22;' + CURSOR_NAMES[ACursor] + #7);
 end;
 
 // ── Layout ──────────────────────────────────────────────────────────────────
@@ -386,16 +462,6 @@ end;
 procedure TConsoleBase.ShowCursor;
 begin
   System.Write(ESC + '[?25h');
-end;
-
-function TConsoleBase.Width: Integer;
-begin
-  Result := FWidth;
-end;
-
-function TConsoleBase.Height: Integer;
-begin
-  Result := FHeight;
 end;
 
 procedure TConsoleBase.RefreshSize;

@@ -2,7 +2,7 @@
 
 A lightweight, cross-platform TUI (Text User Interface) framework for Delphi.
 
-**Windows + Linux + macOS** from a single codebase. 
+**Windows + Linux + macOS** from a single codebase. Under 1500 lines including comments.
 
 ## Features
 
@@ -98,13 +98,10 @@ TLayoutRegistry.Register('My Layout', TMyLayout);
 
 It will automatically appear in any layout browser that enumerates the registry.
 
-## Tested on
+## Requirements
 
-- Delphi 12
-- Windows 11
-
-## Should work on
-- Any POSIX terminal 
+- Delphi 10.4 Sydney or later (inline variable declarations)
+- Windows 10+ (for VT100 support) or any POSIX terminal
 
 ## Author
 

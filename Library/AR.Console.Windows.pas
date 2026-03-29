@@ -1,4 +1,4 @@
-unit AR.Console.Windows;
+﻿unit AR.Console.Windows;
 
 {******************************************************************************
   AR.Console.Windows — Windows console implementation
@@ -34,6 +34,8 @@ type
     procedure PlatformDetectSize; override;
     function  PlatformReadKeyCode: Word; override;
     function  PlatformKeyPressed: Boolean; override;
+    procedure PlatformEnableMouse; override;
+    procedure PlatformDisableMouse; override;
   end;
 {$ENDIF}
 
@@ -44,6 +46,14 @@ implementation
 const
   ENABLE_VIRTUAL_TERMINAL_PROCESSING = $0004;
   ENABLE_VIRTUAL_TERMINAL_INPUT      = $0200;
+  ENABLE_QUICK_EDIT_MODE_            = $0040;  // underscore to avoid clash
+  ENABLE_EXTENDED_FLAGS_             = $0080;
+  ENABLE_MOUSE_INPUT_               = $0010;
+  MOUSE_EVENT_                      = $0002;  // TInputRecord.EventType for mouse
+  FROM_LEFT_1ST_BUTTON_PRESSED_     = $0001;
+  RIGHTMOST_BUTTON_PRESSED_         = $0002;
+  MOUSE_MOVED_                      = $0001;  // dwEventFlags
+  MOUSE_WHEELED_                    = $0004;  // dwEventFlags
 
 procedure TWindowsConsole.PlatformInit;
 begin
@@ -85,8 +95,8 @@ var
 begin
   if GetConsoleScreenBufferInfo(FStdOut, Info) then
   begin
-    FWidth  := Info.srWindow.Right  - Info.srWindow.Left + 1;
-    FHeight := Info.srWindow.Bottom - Info.srWindow.Top  + 1;
+    ScreenWidth  := Info.srWindow.Right  - Info.srWindow.Left + 1;
+    ScreenHeight := Info.srWindow.Bottom - Info.srWindow.Top  + 1;
   end;
 end;
 
@@ -94,13 +104,16 @@ function TWindowsConsole.PlatformReadKeyCode: Word;
 var
   Buf: TInputRecord;
   NumRead: DWORD;
+  Evt: TMouseEvent;
+  WheelDelta: SmallInt;
 begin
   Result := KEY_NONE;
   repeat
     ReadConsoleInput(FStdIn, Buf, 1, NumRead);
+
+    // ── Keyboard ────────────────────────────────────────────────────────
     if (Buf.EventType = KEY_EVENT) and Buf.Event.KeyEvent.bKeyDown then
     begin
-      // Check virtual key code first for special keys
       case Buf.Event.KeyEvent.wVirtualKeyCode of
         VK_UP:     Exit(KEY_UP);
         VK_DOWN:   Exit(KEY_DOWN);
@@ -129,9 +142,51 @@ begin
         VK_TAB:    Exit(KEY_TAB);
         VK_BACK:   Exit(KEY_BACKSPACE);
       else
-        // Printable character from UnicodeChar
         if Buf.Event.KeyEvent.UnicodeChar <> #0 then
           Exit(Word(Buf.Event.KeyEvent.UnicodeChar));
+      end;
+    end
+
+    // ── Mouse ───────────────────────────────────────────────────────────
+    else if (Buf.EventType = MOUSE_EVENT_) and MouseActive then
+    begin
+      case Buf.Event.MouseEvent.dwEventFlags of
+        0: // button press or release
+        begin
+          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X + 1;
+          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y + 1;
+          if Buf.Event.MouseEvent.dwButtonState and FROM_LEFT_1ST_BUTTON_PRESSED_ <> 0 then
+          begin
+            Evt.Button  := mbLeft;
+            Evt.Pressed := True;
+          end
+          else if Buf.Event.MouseEvent.dwButtonState and RIGHTMOST_BUTTON_PRESSED_ <> 0 then
+          begin
+            Evt.Button  := mbRight;
+            Evt.Pressed := True;
+          end
+          else
+          begin
+            Evt.Button  := mbNone;
+            Evt.Pressed := False;
+          end;
+          MouseState := Evt;
+          Exit(KEY_MOUSE);
+        end;
+        MOUSE_WHEELED_:
+        begin
+          Evt.Col := Buf.Event.MouseEvent.dwMousePosition.X + 1;
+          Evt.Row := Buf.Event.MouseEvent.dwMousePosition.Y + 1;
+          WheelDelta := SmallInt(Buf.Event.MouseEvent.dwButtonState shr 16);
+          if WheelDelta > 0 then
+            Evt.Button := mbWheelUp
+          else
+            Evt.Button := mbWheelDown;
+          Evt.Pressed := True;
+          MouseState := Evt;
+          Exit(KEY_MOUSE);
+        end;
+        // MOUSE_MOVED_ — silently ignored (consumed by the loop)
       end;
     end;
   until False;
@@ -139,10 +194,55 @@ end;
 
 function TWindowsConsole.PlatformKeyPressed: Boolean;
 var
-  Count: DWORD;
+  Buf: TInputRecord;
+  Count, NumRead: DWORD;
 begin
-  GetNumberOfConsoleInputEvents(FStdIn, Count);
-  Result := Count > 0;
+  // Drain events we ignore (mouse-move, key-up, focus, buffer-size) so
+  // they don't cause the main loop to call ReadKeyCode and block.
+  while True do
+  begin
+    GetNumberOfConsoleInputEvents(FStdIn, Count);
+    if Count = 0 then Exit(False);
+
+    PeekConsoleInput(FStdIn, Buf, 1, NumRead);
+    if NumRead = 0 then Exit(False);
+
+    // Key-down events are always interesting
+    if (Buf.EventType = KEY_EVENT) and Buf.Event.KeyEvent.bKeyDown then
+      Exit(True);
+
+    // Mouse events: clicks and wheel are interesting, moves are not
+    if (Buf.EventType = MOUSE_EVENT_) and MouseActive then
+    begin
+      if Buf.Event.MouseEvent.dwEventFlags <> MOUSE_MOVED_ then
+        Exit(True);
+      // Mouse-move — consume and continue
+      ReadConsoleInput(FStdIn, Buf, 1, NumRead);
+      Continue;
+    end;
+
+    // Anything else (key-up, focus, buffer-size, mouse-move) — consume
+    ReadConsoleInput(FStdIn, Buf, 1, NumRead);
+  end;
+end;
+
+procedure TWindowsConsole.PlatformEnableMouse;
+var
+  Mode: DWORD;
+begin
+  GetConsoleMode(FStdIn, Mode);
+  Mode := (Mode or ENABLE_MOUSE_INPUT_ or ENABLE_EXTENDED_FLAGS_)
+              and (not ENABLE_QUICK_EDIT_MODE_);
+  SetConsoleMode(FStdIn, Mode);
+end;
+
+procedure TWindowsConsole.PlatformDisableMouse;
+var
+  Mode: DWORD;
+begin
+  GetConsoleMode(FStdIn, Mode);
+  Mode := Mode and (not ENABLE_MOUSE_INPUT_);
+  SetConsoleMode(FStdIn, Mode);
 end;
 
 {$ENDIF}

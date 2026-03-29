@@ -1,0 +1,7 @@
+﻿*.dproj
+*.local
+*.identcache
+Library/__history
+*.dcu
+*.exe
+*.res

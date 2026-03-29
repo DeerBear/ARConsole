@@ -27,14 +27,18 @@ type
   TPosixConsole = class(TConsoleBase)
   private
     FOrigTermios: termios;
+    FPushback: Integer;  // -1 = empty, >= 0 = buffered byte
     function ReadByte: Byte;
     function ReadByteTimeout(ATimeoutDs: Byte; out AByte: Byte): Boolean;
+    function ParseSGRMouse: Word;
   protected
     procedure PlatformInit; override;
     procedure PlatformShutdown; override;
     procedure PlatformDetectSize; override;
     function  PlatformReadKeyCode: Word; override;
     function  PlatformKeyPressed: Boolean; override;
+    procedure PlatformEnableMouse; override;
+    procedure PlatformDisableMouse; override;
   end;
 {$ENDIF}
 
@@ -69,6 +73,7 @@ procedure TPosixConsole.PlatformInit;
 var
   Raw: termios;
 begin
+  FPushback := -1;
   tcgetattr(STDIN_FILENO, @FOrigTermios);
   Raw := FOrigTermios;
 
@@ -92,13 +97,19 @@ var
 begin
   if ioctl(STDIN_FILENO, TIOCGWINSZ, @WS) = 0 then
   begin
-    FWidth  := WS.ws_col;
-    FHeight := WS.ws_row;
+    ScreenWidth  := WS.ws_col;
+    ScreenHeight := WS.ws_row;
   end;
 end;
 
 function TPosixConsole.ReadByte: Byte;
 begin
+  if FPushback >= 0 then
+  begin
+    Result := Byte(FPushback);
+    FPushback := -1;
+    Exit;
+  end;
   Result := 0;
   Posix.Unistd.__read(STDIN_FILENO, @Result, 1);
 end;
@@ -142,6 +153,7 @@ begin
     // CSI sequence: ESC [ <code>
     B2 := ReadByte;
     case Chr(B2) of
+      '<': Exit(ParseSGRMouse);   // SGR mouse: ESC [ < Cb ; Cx ; Cy M/m
       'A': Exit(KEY_UP);
       'B': Exit(KEY_DOWN);
       'C': Exit(KEY_RIGHT);
@@ -217,6 +229,11 @@ var
   B: Byte;
   N: Integer;
 begin
+  // If we already have a pushed-back byte, there is input ready.
+  if FPushback >= 0 then
+    Exit(True);
+
+  // Non-blocking probe — stash the byte so ReadByte can return it later.
   tcgetattr(STDIN_FILENO, @Saved);
   Tmp := Saved;
   Tmp.c_cc[VMIN]  := 0;
@@ -224,7 +241,94 @@ begin
   tcsetattr(STDIN_FILENO, TCSANOW, @Tmp);
   N := Posix.Unistd.__read(STDIN_FILENO, @B, 1);
   tcsetattr(STDIN_FILENO, TCSANOW, @Saved);
-  Result := N > 0;
+
+  if N > 0 then
+  begin
+    FPushback := B;
+    Result := True;
+  end
+  else
+    Result := False;
+end;
+
+// ── SGR mouse parsing ─────────────────────────────────────────────────────
+
+function TPosixConsole.ParseSGRMouse: Word;
+var
+  BtnCode, X, Y: Integer;
+  B2: Byte;
+  Evt: TMouseEvent;
+begin
+  // Format: ESC [ < Cb ; Cx ; Cy M/m   (the '<' was already consumed)
+  // Parse button code
+  BtnCode := 0;
+  repeat
+    B2 := ReadByte;
+    if (B2 >= Ord('0')) and (B2 <= Ord('9')) then
+      BtnCode := BtnCode * 10 + Integer(B2 - Ord('0'));
+  until B2 = Ord(';');
+
+  // Parse column
+  X := 0;
+  repeat
+    B2 := ReadByte;
+    if (B2 >= Ord('0')) and (B2 <= Ord('9')) then
+      X := X * 10 + Integer(B2 - Ord('0'));
+  until B2 = Ord(';');
+
+  // Parse row + final character
+  Y := 0;
+  repeat
+    B2 := ReadByte;
+    if (B2 >= Ord('0')) and (B2 <= Ord('9')) then
+      Y := Y * 10 + Integer(B2 - Ord('0'));
+  until (B2 = Ord('M')) or (B2 = Ord('m'));
+
+  // Ignore motion events (bit 5 set)
+  if BtnCode and 32 <> 0 then
+    Exit(KEY_NONE);
+
+  if not MouseActive then
+    Exit(KEY_NONE);
+
+  Evt.Col     := X;
+  Evt.Row     := Y;
+  Evt.Pressed := (B2 = Ord('M'));
+
+  // Scroll wheel (bit 6 set)
+  if BtnCode and 64 <> 0 then
+  begin
+    if BtnCode and 1 = 0 then
+      Evt.Button := mbWheelUp
+    else
+      Evt.Button := mbWheelDown;
+    Evt.Pressed := True;
+  end
+  else
+  begin
+    case BtnCode and $03 of
+      0: Evt.Button := mbLeft;
+      1: Evt.Button := mbMiddle;
+      2: Evt.Button := mbRight;
+    else Evt.Button := mbNone;
+    end;
+  end;
+
+  MouseState := Evt;
+  Result := KEY_MOUSE;
+end;
+
+// ── Mouse enable / disable ────────────────────────────────────────────────
+
+procedure TPosixConsole.PlatformEnableMouse;
+begin
+  // X10 normal tracking + SGR extended coordinates (supports > 223 cols)
+  System.Write(ESC + '[?1000h' + ESC + '[?1006h');
+end;
+
+procedure TPosixConsole.PlatformDisableMouse;
+begin
+  System.Write(ESC + '[?1006l' + ESC + '[?1000l');
 end;
 
 {$ENDIF}

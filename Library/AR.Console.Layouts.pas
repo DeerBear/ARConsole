@@ -61,11 +61,44 @@ type
     constructor Create(AConsole: TConsoleBase; AStyle: TBoxStyle = bsDouble); override;
   end;
 
+  // ── Bar item base class ────────────────────────────────────────────────
+  //   A clickable element in the tab bar.  Subclasses decide appearance.
+  TBarItemClickProc = reference to procedure;
+
+  TBarItem = class
+  private
+    FLabel: string;
+  public
+    constructor Create(const ALabel: string);
+    procedure Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
+      AActiveColor, AInactiveColor: TConsoleColor); virtual; abstract;
+    function DisplayWidth: Integer; virtual; abstract;
+    property Label_: string read FLabel;
+  end;
+
+  TTabItem = class(TBarItem)
+  public
+    procedure Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
+      AActiveColor, AInactiveColor: TConsoleColor); override;
+    function DisplayWidth: Integer; override;
+  end;
+
+  TButtonItem = class(TBarItem)
+  private
+    FOnClick: TBarItemClickProc;
+  public
+    constructor Create(const ALabel: string; AOnClick: TBarItemClickProc);
+    procedure Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
+      AActiveColor, AInactiveColor: TConsoleColor); override;
+    function DisplayWidth: Integer; override;
+    property OnClick: TBarItemClickProc read FOnClick;
+  end;
+
   // ── Tab bar component ───────────────────────────────────────────────────
   TTabBar = class
   private
     FConsole: TConsoleBase;
-    FTabs: TArray<string>;
+    FItems: TArray<TBarItem>;
     FActiveIndex: Integer;
     FRow: Integer;
     FLeft: Integer;
@@ -73,19 +106,29 @@ type
     FActiveColor: TConsoleColor;
     FInactiveColor: TConsoleColor;
     FFocused: Boolean;
+    procedure ClearItems;
+    function GetItem(AIndex: Integer): TBarItem;
   public
     constructor Create(AConsole: TConsoleBase);
+    destructor Destroy; override;
     procedure SetTabs(const ATabs: array of string);
+    function  AddButton(const ALabel: string; AOnClick: TBarItemClickProc): TButtonItem;
     procedure SetBounds(ALeft, ARow, AWidth: Integer);
     procedure Draw;
     procedure SelectNext;
     procedure SelectPrev;
     procedure SelectTab(AIndex: Integer);
     function  TabCount: Integer;
+    function  ItemCount: Integer;
+    function  IsButton(AIndex: Integer): Boolean;
+    // Returns the item index at screen position (ACol, ARow), or -1 if none.
+    function  HitTest(ACol, ARow: Integer): Integer;
+    property  Items[AIndex: Integer]: TBarItem read GetItem;
     property  ActiveIndex: Integer read FActiveIndex;
     property  ActiveColor: TConsoleColor read FActiveColor write FActiveColor;
     property  InactiveColor: TConsoleColor read FInactiveColor write FInactiveColor;
     property  Focused: Boolean read FFocused write FFocused;
+    property  Row: Integer read FRow;
   end;
 
   // ── Tabbed layout ──────────────────────────────────────────────────────
@@ -232,6 +275,76 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════
+  TBarItem / TTabItem / TButtonItem
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+constructor TBarItem.Create(const ALabel: string);
+begin
+  inherited Create;
+  FLabel := ALabel;
+end;
+
+// ── TTabItem ──────────────────────────────────────────────────────────────
+
+function TTabItem.DisplayWidth: Integer;
+begin
+  Result := Length(Label_) + 2;  // ' Label '
+end;
+
+procedure TTabItem.Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
+  AActiveColor, AInactiveColor: TConsoleColor);
+var
+  Lbl: string;
+begin
+  Lbl := ' ' + Label_ + ' ';
+  if AActive then
+  begin
+    if AFocused then
+    begin
+      AConsole.SetColor(AActiveColor);
+      System.Write(ESC + '[7m');
+      AConsole.Print(Lbl);
+      System.Write(ESC + '[27m');
+    end
+    else
+    begin
+      AConsole.SetColor(ccCyan);
+      System.Write(ESC + '[4m');
+      AConsole.Print(Lbl);
+      System.Write(ESC + '[24m');
+    end;
+  end
+  else
+  begin
+    AConsole.SetColor(AInactiveColor);
+    AConsole.Print(Lbl);
+  end;
+end;
+
+// ── TButtonItem ───────────────────────────────────────────────────────────
+
+constructor TButtonItem.Create(const ALabel: string; AOnClick: TBarItemClickProc);
+begin
+  inherited Create(ALabel);
+  FOnClick := AOnClick;
+end;
+
+function TButtonItem.DisplayWidth: Integer;
+begin
+  Result := Length(Label_) + 4;  // '[ Label ]'
+end;
+
+procedure TButtonItem.Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
+  AActiveColor, AInactiveColor: TConsoleColor);
+var
+  Lbl: string;
+begin
+  Lbl := '[ ' + Label_ + ' ]';
+  AConsole.SetColor(ccBrightCyan);
+  AConsole.Print(Lbl);
+end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
   TTabBar
   ═══════════════════════════════════════════════════════════════════════════ }
 
@@ -248,15 +361,44 @@ begin
   FFocused       := True;
 end;
 
+destructor TTabBar.Destroy;
+begin
+  ClearItems;
+  inherited;
+end;
+
+procedure TTabBar.ClearItems;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FItems) do
+    FItems[I].Free;
+  FItems := nil;
+end;
+
+function TTabBar.GetItem(AIndex: Integer): TBarItem;
+begin
+  Result := FItems[AIndex];
+end;
+
 procedure TTabBar.SetTabs(const ATabs: array of string);
 var
   I: Integer;
 begin
-  SetLength(FTabs, Length(ATabs));
+  ClearItems;
+  SetLength(FItems, Length(ATabs));
   for I := 0 to High(ATabs) do
-    FTabs[I] := ATabs[I];
-  if FActiveIndex >= Length(FTabs) then
+    FItems[I] := TTabItem.Create(ATabs[I]);
+  if FActiveIndex >= Length(FItems) then
     FActiveIndex := 0;
+end;
+
+function TTabBar.AddButton(const ALabel: string;
+  AOnClick: TBarItemClickProc): TButtonItem;
+begin
+  Result := TButtonItem.Create(ALabel, AOnClick);
+  SetLength(FItems, Length(FItems) + 1);
+  FItems[High(FItems)] := Result;
 end;
 
 procedure TTabBar.SetBounds(ALeft, ARow, AWidth: Integer);
@@ -268,65 +410,62 @@ end;
 
 procedure TTabBar.Draw;
 var
-  I: Integer;
-  Col: Integer;
-  Lbl: string;
+  I, Col: Integer;
 begin
   FConsole.PrintAt(FLeft, FRow, StringOfChar(' ', FWidth));
 
   Col := FLeft;
-  for I := 0 to High(FTabs) do
+  for I := 0 to High(FItems) do
   begin
     FConsole.MoveTo(Col, FRow);
-    Lbl := ' ' + FTabs[I] + ' ';
-
-    if I = FActiveIndex then
-    begin
-      if FFocused then
-      begin
-        FConsole.SetColor(FActiveColor);
-        System.Write(ESC + '[7m');
-        FConsole.Print(Lbl);
-        System.Write(ESC + '[27m');
-      end
-      else
-      begin
-        FConsole.SetColor(ccCyan);
-        System.Write(ESC + '[4m');
-        FConsole.Print(Lbl);
-        System.Write(ESC + '[24m');
-      end;
-      FConsole.ResetColor;
-    end
-    else
-    begin
-      FConsole.SetColor(FInactiveColor);
-      FConsole.Print(Lbl);
-    end;
-
-    Col := Col + Length(Lbl) + 1;
+    FItems[I].Draw(FConsole, I = FActiveIndex, FFocused,
+                   FActiveColor, FInactiveColor);
+    Col := Col + FItems[I].DisplayWidth + 1;
   end;
 
   FConsole.ResetColor;
 end;
 
 procedure TTabBar.SelectNext;
+var
+  Start, I: Integer;
 begin
-  if Length(FTabs) = 0 then Exit;
-  FActiveIndex := (FActiveIndex + 1) mod Length(FTabs);
-  Draw;
+  if Length(FItems) = 0 then Exit;
+  Start := FActiveIndex;
+  I := FActiveIndex;
+  repeat
+    I := (I + 1) mod Length(FItems);
+    if FItems[I] is TTabItem then
+    begin
+      FActiveIndex := I;
+      Draw;
+      Exit;
+    end;
+  until I = Start;
 end;
 
 procedure TTabBar.SelectPrev;
+var
+  Start, I: Integer;
 begin
-  if Length(FTabs) = 0 then Exit;
-  FActiveIndex := (FActiveIndex - 1 + Length(FTabs)) mod Length(FTabs);
-  Draw;
+  if Length(FItems) = 0 then Exit;
+  Start := FActiveIndex;
+  I := FActiveIndex;
+  repeat
+    I := (I - 1 + Length(FItems)) mod Length(FItems);
+    if FItems[I] is TTabItem then
+    begin
+      FActiveIndex := I;
+      Draw;
+      Exit;
+    end;
+  until I = Start;
 end;
 
 procedure TTabBar.SelectTab(AIndex: Integer);
 begin
-  if (AIndex >= 0) and (AIndex < Length(FTabs)) then
+  if (AIndex >= 0) and (AIndex <= High(FItems))
+    and (FItems[AIndex] is TTabItem) then
   begin
     FActiveIndex := AIndex;
     Draw;
@@ -334,8 +473,48 @@ begin
 end;
 
 function TTabBar.TabCount: Integer;
+var
+  I: Integer;
 begin
-  Result := Length(FTabs);
+  Result := 0;
+  for I := 0 to High(FItems) do
+    if FItems[I] is TTabItem then
+      Inc(Result);
+end;
+
+function TTabBar.ItemCount: Integer;
+begin
+  Result := Length(FItems);
+end;
+
+function TTabBar.IsButton(AIndex: Integer): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex <= High(FItems))
+    and (FItems[AIndex] is TButtonItem);
+end;
+
+function TTabBar.HitTest(ACol, ARow: Integer): Integer;
+var
+  I, Col, NextCol: Integer;
+begin
+  Result := -1;
+  // Accept clicks on the tab row and the divider rows directly above/below
+  if (ARow < FRow - 1) or (ARow > FRow + 1) then Exit;
+  if (ACol < FLeft) or (ACol >= FLeft + FWidth) then Exit;
+
+  Col := FLeft;
+  for I := 0 to High(FItems) do
+  begin
+    // Each item owns the space up to the next item's start,
+    // or to the end of the bar for the last item.
+    if I < High(FItems) then
+      NextCol := Col + FItems[I].DisplayWidth + 1
+    else
+      NextCol := FLeft + FWidth;
+    if (ACol >= Col) and (ACol < NextCol) then
+      Exit(I);
+    Col := NextCol;
+  end;
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════

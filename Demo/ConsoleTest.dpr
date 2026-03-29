@@ -13,7 +13,8 @@ program ConsoleTest;
                         preview each with sample box drawing, Enter applies
 
   Focus model:
-    Tab bar focused : Left/Right/Tab cycle tabs, Enter/Down enters content
+    Tab bar focused : Left/Right/Tab cycle tabs, Enter/Down enters content,
+                      mouse click on tab switches, scroll wheel scrolls
     Content focused : Tab-specific keys, Tab/Escape returns to tab bar
 
   Escape from the tab bar exits the application.
@@ -316,13 +317,27 @@ end;
 procedure RunTabbedApp;
 var
   Code, Replay: Word;
-  PrevTab: Integer;
+  PrevTab, HitTab: Integer;
   Done: Boolean;
+  ME: TMouseEvent;
 begin
   GLayout := TTabbedLayout.Create(Con, bsDouble);
   GLayout.TabBar.SetTabs(['Colours', 'Input', 'Layouts']);
+  GLayout.TabBar.AddButton('About', procedure
+  begin
+    Con.ClearContent;
+    Con.SetColor(ccBrightCyan);
+    Con.PrintContent(1, 1, 'AR.Console Framework');
+    Con.SetColor(ccGray);
+    Con.PrintContent(1, 3, 'A lightweight TUI framework for Delphi.');
+    Con.PrintContent(1, 4, 'Supports mouse input, colours, layouts, and tabs.');
+    Con.PrintContent(1, 5, 'Built with TBarItem polymorphism: TTabItem + TButtonItem.');
+    Con.ResetColor;
+    Con.ShowStatus('Click a tab or press a key to continue');
+  end);
   Con.SetLayout(GLayout);
 
+  Con.EnableMouse;
   DrawTitle;
   PreviewCurrentTab;
   SetFocusTabBar;
@@ -367,6 +382,42 @@ begin
       end;
       KEY_ESCAPE:
         Done := True;
+      KEY_MOUSE:
+      begin
+        ME := Con.MouseEvent;
+        if ME.Pressed and (ME.Button = mbLeft) then
+        begin
+          HitTab := GLayout.TabBar.HitTest(ME.Col, ME.Row);
+          if HitTab >= 0 then
+          begin
+            if GLayout.TabBar.IsButton(HitTab) then
+            begin
+              // Button click — fire callback
+              TButtonItem(GLayout.TabBar.Items[HitTab]).OnClick();
+            end
+            else
+            begin
+              // Tab click — select and enter content
+              GLayout.TabBar.SelectTab(HitTab);
+              Replay := EnterContent;
+              SetFocusTabBar;
+              PreviewCurrentTab;
+              case Replay of
+                KEY_LEFT:  begin GLayout.TabBar.SelectPrev; PreviewCurrentTab; end;
+                KEY_RIGHT: begin GLayout.TabBar.SelectNext; PreviewCurrentTab; end;
+              end;
+            end;
+          end;
+        end
+        // Hover — hand cursor over tab/button labels, arrow elsewhere
+        else if ME.Button = mbNone then
+        begin
+          if GLayout.TabBar.HitTest(ME.Col, ME.Row) >= 0 then
+            Con.SetMouseCursor(crPointer)
+          else
+            Con.SetMouseCursor(crDefault);
+        end;
+      end;
     else
       if (Code >= Ord('1')) and (Code <= Ord('3')) then
       begin
@@ -376,6 +427,8 @@ begin
       end;
     end;
   end;
+
+  Con.DisableMouse;
 end;
 
 begin
