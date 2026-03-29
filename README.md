@@ -2,7 +2,9 @@
 
 A lightweight, cross-platform TUI (Text User Interface) framework for Delphi.
 
-**Windows + Linux + macOS** from a single codebase. Under 1500 lines including comments.
+**Windows + Linux + macOS** from a single codebase.
+
+![AR.Console screenshot](ARConsole_ScreenShot.png)
 
 ## Features
 
@@ -10,9 +12,11 @@ A lightweight, cross-platform TUI (Text User Interface) framework for Delphi.
 - **Unicode box drawing** -- single-line and double-line frame characters
 - **16-colour palette** -- standard + bright ANSI foreground colours
 - **Extended key input** -- arrow keys, F-keys, Home/End/PgUp/PgDn with full CSI parsing on POSIX
+- **Mouse support** -- click detection, wheel scrolling, and cursor shapes (`crDefault`, `crPointer`, `crBusy`) via SGR mouse protocol
 - **Layout system** -- abstract `TConsoleLayout` base with pluggable concrete layouts
 - **Layout registry** -- `TLayoutRegistry` for enumerating and instantiating registered layouts, each with a self-rendering preview
-- **Tab bar** -- `TTabBar` with arrow/Tab navigation, focus state (reverse-video / underline), and Enter activation
+- **Tab bar** -- `TTabBar` with arrow/Tab navigation, focus state (reverse-video / underline), Enter activation, and clickable tabs
+- **Button items** -- `TButtonItem` with `OnClick` handlers, embeddable in the tab bar alongside tabs
 - **Focus model** -- tab-bar vs content focus with key bubbling via `ReadLine(out AExitKey)`
 - **Layout helpers** -- `PrintContent`, `ShowStatus`, `PromptInput` for working relative to the content area
 - **Menu system** -- `ShowMenu` draws a framed option list and waits for a keypress
@@ -22,9 +26,12 @@ A lightweight, cross-platform TUI (Text User Interface) framework for Delphi.
 ```
 Library/
   AR.Console.Base.pas       -- TConsoleBase (abstract), TConsoleLayout (abstract),
-                               enums, key codes, box-drawing constants, ANSI output
+                               enums (TConsoleColor, TBoxStyle, TConsoleCursor,
+                               TMouseButton, TMouseEvent), key codes, box-drawing
+                               constants, ANSI output
   AR.Console.Layouts.pas    -- TFrameLayout, TSingleFrameLayout, TDoubleFrameLayout,
-                               TTabBar, TTabbedLayout, TLayoutRegistry
+                               TTabBar, TBarItem / TTabItem / TButtonItem,
+                               TTabbedLayout, TLayoutRegistry
   AR.Console.Windows.pas    -- TWindowsConsole : TConsoleBase
   AR.Console.POSIX.pas      -- TPosixConsole : TConsoleBase
   AR.Console.pas            -- TConsole = platform alias + Con singleton
@@ -84,13 +91,53 @@ begin
   Con.SetLayout(Layout);
 
   // Left/Right/Tab to cycle, Enter to activate
+  // Click a tab with the mouse to switch directly
   // See Demo/ConsoleTest.dpr for a complete focus-model example.
+end.
+```
+
+### Mouse support
+
+```pascal
+begin
+  Con.EnableMouse;
+  Con.SetMouseCursor(crPointer);
+
+  repeat
+    Key := Con.ReadKeyCode;
+    if Key = KEY_MOUSE then
+    begin
+      Evt := Con.MouseEvent;
+      if (Evt.Button = mbLeft) and Evt.Pressed then
+        Con.PrintAt(1, 1, Format('Click at %d,%d', [Evt.Col, Evt.Row]));
+    end;
+  until Key = KEY_ESCAPE;
+
+  Con.DisableMouse;
+end.
+```
+
+### Adding a button to the tab bar
+
+```pascal
+var
+  Layout: TTabbedLayout;
+begin
+  Layout := TTabbedLayout.Create(Con, bsDouble);
+  Layout.TabBar.SetTabs(['Tab 1', 'Tab 2']);
+  Layout.TabBar.AddButton('[Quit]',
+    procedure begin ShouldExit := True; end);
+  Con.SetLayout(Layout);
 end.
 ```
 
 ## Extending
 
-**Add a new layout:** subclass `TConsoleLayout`, implement `DrawFrame`, `DrawPreview`, `GetContentArea`, `GetInputRow`, `GetInputCol`, `GetTitleArea`, and register it:
+**Add a new layout:** subclass `TConsoleLayout`, implement `DrawFrame`, `DrawPreview`, `GetContentArea`, `GetInputRow`, `GetInputCol`, `GetTitleArea`, and register it.
+
+**Add a custom bar item:** subclass `TBarItem`, implement `Draw` and `DisplayWidth`, and add it to the tab bar.
+
+**Register a layout:**
 
 ```pascal
 TLayoutRegistry.Register('My Layout', TMyLayout);
