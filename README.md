@@ -17,6 +17,8 @@ A lightweight, cross-platform TUI (Text User Interface) framework for Delphi.
 - **Layout registry** -- `TLayoutRegistry` for enumerating and instantiating registered layouts, each with a self-rendering preview
 - **Tab bar** -- `TTabBar` with arrow/Tab navigation, focus state (reverse-video / underline), Enter activation, and clickable tabs
 - **Button items** -- `TButtonItem` with `OnClick` handlers, embeddable in the tab bar alongside tabs
+- **List box** -- `TListBox` with keyboard/mouse navigation, scrolling, and optional multi-column display
+- **Clickable item base** -- `TClickableItem` shared ancestor for bar items, list-box items, and custom clickable elements
 - **Focus model** -- tab-bar vs content focus with key bubbling via `ReadLine(out AExitKey)`
 - **Layout helpers** -- `PrintContent`, `ShowStatus`, `PromptInput` for working relative to the content area
 - **Menu system** -- `ShowMenu` draws a framed option list and waits for a keypress
@@ -29,9 +31,9 @@ Library/
                                enums (TConsoleColor, TBoxStyle, TConsoleCursor,
                                TMouseButton, TMouseEvent), key codes, box-drawing
                                constants, ANSI output
-  AR.Console.Layouts.pas    -- TFrameLayout, TSingleFrameLayout, TDoubleFrameLayout,
-                               TTabBar, TBarItem / TTabItem / TButtonItem,
-                               TTabbedLayout, TLayoutRegistry
+  AR.Console.Layouts.pas    -- TClickableItem, TBarItem / TTabItem / TButtonItem,
+                               TFrameLayout, TSingleFrameLayout, TDoubleFrameLayout,
+                               TTabBar, TListBox, TTabbedLayout, TLayoutRegistry
   AR.Console.Windows.pas    -- TWindowsConsole : TConsoleBase
   AR.Console.POSIX.pas      -- TPosixConsole : TConsoleBase
   AR.Console.pas            -- TConsole = platform alias + Con singleton
@@ -131,11 +133,35 @@ begin
 end.
 ```
 
+### Using a list box
+
+```pascal
+var
+  LB: TListBox;
+begin
+  LB := TListBox.Create(Con);
+  LB.SetBounds(3, 6, 30, 10);       // left, top, width, height
+  LB.Columns := 1;                   // set to 2+ for multi-column
+  LB.AddItem('Option A');
+  LB.AddItem('Option B');
+  LB.AddItem('Option C', procedure begin ShowMessage('C!'); end);
+  LB.Draw;
+
+  // In your key loop:
+  //   if LB.HandleKey(KeyCode) then
+  //     ... selection changed or Enter fired OnClick ...
+  //
+  // For mouse clicks:
+  //   Hit := LB.HitTest(MouseEvt.Col, MouseEvt.Row);
+  //   if Hit >= 0 then begin LB.SelectedIndex := Hit; LB.Draw; end;
+end.
+```
+
 ## Extending
 
 **Add a new layout:** subclass `TConsoleLayout`, implement `DrawFrame`, `DrawPreview`, `GetContentArea`, `GetInputRow`, `GetInputCol`, `GetTitleArea`, and register it.
 
-**Add a custom bar item:** subclass `TBarItem`, implement `Draw` and `DisplayWidth`, and add it to the tab bar.
+**Add a custom clickable item:** subclass `TClickableItem` for list boxes, or subclass `TBarItem` (which adds `Draw` and `DisplayWidth`) for the tab bar.
 
 **Register a layout:**
 

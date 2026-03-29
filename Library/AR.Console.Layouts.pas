@@ -3,12 +3,18 @@
 {******************************************************************************
   AR.Console.Layouts — Concrete layout implementations and registry
 
+  Base items:
+    TClickableItem       — shared ancestor for anything the user can click
+                           or select (bar items, list-box items)
+
   Concrete layouts:
     TFrameLayout         — shared geometry for framed layouts (title,
                            content, input row).  Not registered directly.
     TSingleFrameLayout   — single-line Unicode frame (┌─┐)
     TDoubleFrameLayout   — double-line Unicode frame (╔═╗)
     TTabBar              — arrow-navigable tab strip with focus state
+    TListBox             — scrollable, keyboard/mouse-navigable item list
+                           with optional multi-column display
     TTabbedLayout        — framed layout with an embedded tab bar
 
   Registry:
@@ -28,6 +34,21 @@ uses
 
 type
   TConsoleLayoutClass = class of TConsoleLayout;
+
+  // ── Clickable item base ────────────────────────────────────────────────
+  //   Shared ancestor for anything the user can click or select:
+  //   bar items (tabs, buttons) and list-box items.
+  TItemClickProc = reference to procedure;
+
+  TClickableItem = class
+  strict private
+    FLabel: string;
+    FOnClick: TItemClickProc;
+  public
+    constructor Create(const ALabel: string; AOnClick: TItemClickProc = nil);
+    property Label_: string read FLabel;
+    property OnClick: TItemClickProc read FOnClick write FOnClick;
+  end;
 
   // ── Shared frame geometry ───────────────────────────────────────────────
   //
@@ -63,17 +84,13 @@ type
 
   // ── Bar item base class ────────────────────────────────────────────────
   //   A clickable element in the tab bar.  Subclasses decide appearance.
-  TBarItemClickProc = reference to procedure;
+  TBarItemClickProc = TItemClickProc;   // back-compat alias
 
-  TBarItem = class
-  private
-    FLabel: string;
+  TBarItem = class(TClickableItem)
   public
-    constructor Create(const ALabel: string);
     procedure Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
       AActiveColor, AInactiveColor: TConsoleColor); virtual; abstract;
     function DisplayWidth: Integer; virtual; abstract;
-    property Label_: string read FLabel;
   end;
 
   TTabItem = class(TBarItem)
@@ -84,14 +101,11 @@ type
   end;
 
   TButtonItem = class(TBarItem)
-  private
-    FOnClick: TBarItemClickProc;
   public
-    constructor Create(const ALabel: string; AOnClick: TBarItemClickProc);
+    constructor Create(const ALabel: string; AOnClick: TItemClickProc);
     procedure Draw(AConsole: TConsoleBase; AActive, AFocused: Boolean;
       AActiveColor, AInactiveColor: TConsoleColor); override;
     function DisplayWidth: Integer; override;
-    property OnClick: TBarItemClickProc read FOnClick;
   end;
 
   // ── Tab bar component ───────────────────────────────────────────────────
@@ -112,7 +126,7 @@ type
     constructor Create(AConsole: TConsoleBase);
     destructor Destroy; override;
     procedure SetTabs(const ATabs: array of string);
-    function  AddButton(const ALabel: string; AOnClick: TBarItemClickProc): TButtonItem;
+    function  AddButton(const ALabel: string; AOnClick: TItemClickProc): TButtonItem;
     procedure SetBounds(ALeft, ARow, AWidth: Integer);
     procedure Draw;
     procedure SelectNext;
@@ -129,6 +143,50 @@ type
     property  InactiveColor: TConsoleColor read FInactiveColor write FInactiveColor;
     property  Focused: Boolean read FFocused write FFocused;
     property  Row: Integer read FRow;
+  end;
+
+  // ── List box component ──────────────────────────────────────────────────
+  //   Vertical (or multi-column) list of selectable items.
+  //   Keyboard: Up/Down move selection, Left/Right when Columns>1,
+  //             PgUp/PgDn scroll by page, Enter fires OnClick.
+  //   Mouse:    click selects + fires OnClick, wheel scrolls.
+  TListBox = class
+  strict private
+    FConsole: TConsoleBase;
+    FItems: TArray<TClickableItem>;
+    FSelectedIndex: Integer;
+    FTopIndex: Integer;          // first visible *row* (not item)
+    FLeft, FTop, FWidth, FHeight: Integer;
+    FColumns: Integer;
+    FActiveColor: TConsoleColor;
+    FInactiveColor: TConsoleColor;
+    FOwnsItems: Boolean;
+    function GetItemCount: Integer;
+    function GetItem(AIndex: Integer): TClickableItem;
+    function RowCount: Integer;
+    function VisibleRows: Integer;
+    procedure EnsureVisible;
+  public
+    constructor Create(AConsole: TConsoleBase);
+    destructor Destroy; override;
+    procedure SetBounds(ALeft, ATop, AWidth, AHeight: Integer);
+    function  AddItem(const ALabel: string;
+                      AOnClick: TItemClickProc = nil): TClickableItem;
+    procedure SetItems(const ALabels: array of string);
+    procedure Clear;
+    procedure Draw;
+    // Returns True if the key was consumed.
+    function  HandleKey(AKeyCode: Word): Boolean;
+    // Returns item index at screen position, or -1.
+    function  HitTest(ACol, ARow: Integer): Integer;
+    property  SelectedIndex: Integer read FSelectedIndex write FSelectedIndex;
+    property  TopIndex: Integer read FTopIndex;
+    property  ItemCount: Integer read GetItemCount;
+    property  Items[AIndex: Integer]: TClickableItem read GetItem;
+    property  Columns: Integer read FColumns write FColumns;
+    property  ActiveColor: TConsoleColor read FActiveColor write FActiveColor;
+    property  InactiveColor: TConsoleColor read FInactiveColor write FInactiveColor;
+    property  OwnsItems: Boolean read FOwnsItems write FOwnsItems;
   end;
 
   // ── Tabbed layout ──────────────────────────────────────────────────────
@@ -275,14 +333,19 @@ begin
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════
-  TBarItem / TTabItem / TButtonItem
+  TClickableItem
   ═══════════════════════════════════════════════════════════════════════════ }
 
-constructor TBarItem.Create(const ALabel: string);
+constructor TClickableItem.Create(const ALabel: string; AOnClick: TItemClickProc);
 begin
   inherited Create;
-  FLabel := ALabel;
+  FLabel   := ALabel;
+  FOnClick := AOnClick;
 end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
+  TBarItem / TTabItem / TButtonItem
+  ═══════════════════════════════════════════════════════════════════════════ }
 
 // ── TTabItem ──────────────────────────────────────────────────────────────
 
@@ -323,10 +386,9 @@ end;
 
 // ── TButtonItem ───────────────────────────────────────────────────────────
 
-constructor TButtonItem.Create(const ALabel: string; AOnClick: TBarItemClickProc);
+constructor TButtonItem.Create(const ALabel: string; AOnClick: TItemClickProc);
 begin
-  inherited Create(ALabel);
-  FOnClick := AOnClick;
+  inherited Create(ALabel, AOnClick);
 end;
 
 function TButtonItem.DisplayWidth: Integer;
@@ -515,6 +577,265 @@ begin
       Exit(I);
     Col := NextCol;
   end;
+end;
+
+{ ═══════════════════════════════════════════════════════════════════════════
+  TListBox
+  ═══════════════════════════════════════════════════════════════════════════ }
+
+constructor TListBox.Create(AConsole: TConsoleBase);
+begin
+  inherited Create;
+  FConsole       := AConsole;
+  FSelectedIndex := 0;
+  FTopIndex      := 0;
+  FLeft          := 1;
+  FTop           := 1;
+  FWidth         := 20;
+  FHeight        := 10;
+  FColumns       := 1;
+  FActiveColor   := ccBrightWhite;
+  FInactiveColor := ccGray;
+  FOwnsItems     := True;
+end;
+
+destructor TListBox.Destroy;
+begin
+  if FOwnsItems then
+    Clear;
+  inherited;
+end;
+
+procedure TListBox.SetBounds(ALeft, ATop, AWidth, AHeight: Integer);
+begin
+  FLeft   := ALeft;
+  FTop    := ATop;
+  FWidth  := AWidth;
+  FHeight := AHeight;
+end;
+
+function TListBox.GetItemCount: Integer;
+begin
+  Result := Length(FItems);
+end;
+
+function TListBox.GetItem(AIndex: Integer): TClickableItem;
+begin
+  Result := FItems[AIndex];
+end;
+
+function TListBox.RowCount: Integer;
+begin
+  Result := (Length(FItems) + FColumns - 1) div FColumns;
+end;
+
+function TListBox.VisibleRows: Integer;
+begin
+  Result := FHeight;
+end;
+
+procedure TListBox.EnsureVisible;
+var
+  SelRow: Integer;
+begin
+  if Length(FItems) = 0 then Exit;
+  SelRow := FSelectedIndex div FColumns;
+  if SelRow < FTopIndex then
+    FTopIndex := SelRow
+  else if SelRow >= FTopIndex + VisibleRows then
+    FTopIndex := SelRow - VisibleRows + 1;
+end;
+
+function TListBox.AddItem(const ALabel: string;
+  AOnClick: TItemClickProc): TClickableItem;
+begin
+  Result := TClickableItem.Create(ALabel, AOnClick);
+  SetLength(FItems, Length(FItems) + 1);
+  FItems[High(FItems)] := Result;
+end;
+
+procedure TListBox.SetItems(const ALabels: array of string);
+var
+  I: Integer;
+begin
+  Clear;
+  SetLength(FItems, Length(ALabels));
+  for I := 0 to High(ALabels) do
+    FItems[I] := TClickableItem.Create(ALabels[I]);
+  FSelectedIndex := 0;
+  FTopIndex := 0;
+end;
+
+procedure TListBox.Clear;
+var
+  I: Integer;
+begin
+  if FOwnsItems then
+    for I := 0 to High(FItems) do
+      FItems[I].Free;
+  FItems := nil;
+  FSelectedIndex := 0;
+  FTopIndex := 0;
+end;
+
+procedure TListBox.Draw;
+var
+  R, C, Idx: Integer;
+  ColW: Integer;
+  Lbl: string;
+  ScreenRow: Integer;
+begin
+  if FColumns < 1 then FColumns := 1;
+  ColW := FWidth div FColumns;
+
+  for R := FTopIndex to FTopIndex + VisibleRows - 1 do
+  begin
+    ScreenRow := FTop + (R - FTopIndex);
+    // Clear the whole row first
+    FConsole.PrintAt(FLeft, ScreenRow, StringOfChar(' ', FWidth));
+
+    for C := 0 to FColumns - 1 do
+    begin
+      Idx := R * FColumns + C;
+      if Idx > High(FItems) then
+        Break;
+
+      Lbl := FItems[Idx].Label_;
+      // Truncate if too wide
+      if Length(Lbl) > ColW - 2 then
+        Lbl := Copy(Lbl, 1, ColW - 3) + #$2026;  // ellipsis
+      Lbl := ' ' + Lbl + StringOfChar(' ', ColW - Length(Lbl) - 1);
+      // Clamp to column width
+      if Length(Lbl) > ColW then
+        Lbl := Copy(Lbl, 1, ColW);
+
+      FConsole.MoveTo(FLeft + C * ColW, ScreenRow);
+
+      if Idx = FSelectedIndex then
+      begin
+        FConsole.SetColor(FActiveColor);
+        System.Write(ESC + '[7m');   // reverse video
+        FConsole.Print(Lbl);
+        System.Write(ESC + '[27m');
+      end
+      else
+      begin
+        FConsole.SetColor(FInactiveColor);
+        FConsole.Print(Lbl);
+      end;
+    end;
+  end;
+
+  FConsole.ResetColor;
+end;
+
+function TListBox.HandleKey(AKeyCode: Word): Boolean;
+var
+  PageSize, NewIdx: Integer;
+begin
+  Result := True;
+  if Length(FItems) = 0 then
+    Exit(False);
+
+  case AKeyCode of
+    KEY_UP:
+    begin
+      NewIdx := FSelectedIndex - FColumns;
+      if NewIdx >= 0 then
+      begin
+        FSelectedIndex := NewIdx;
+        EnsureVisible;
+        Draw;
+      end;
+    end;
+    KEY_DOWN:
+    begin
+      NewIdx := FSelectedIndex + FColumns;
+      if NewIdx <= High(FItems) then
+      begin
+        FSelectedIndex := NewIdx;
+        EnsureVisible;
+        Draw;
+      end;
+    end;
+    KEY_LEFT:
+    begin
+      if (FColumns > 1) and (FSelectedIndex mod FColumns > 0) then
+      begin
+        Dec(FSelectedIndex);
+        Draw;
+      end
+      else
+        Result := False;
+    end;
+    KEY_RIGHT:
+    begin
+      if (FColumns > 1) and (FSelectedIndex mod FColumns < FColumns - 1)
+        and (FSelectedIndex + 1 <= High(FItems)) then
+      begin
+        Inc(FSelectedIndex);
+        Draw;
+      end
+      else
+        Result := False;
+    end;
+    KEY_PGUP:
+    begin
+      PageSize := VisibleRows * FColumns;
+      FSelectedIndex := FSelectedIndex - PageSize;
+      if FSelectedIndex < 0 then
+        FSelectedIndex := 0;
+      EnsureVisible;
+      Draw;
+    end;
+    KEY_PGDN:
+    begin
+      PageSize := VisibleRows * FColumns;
+      FSelectedIndex := FSelectedIndex + PageSize;
+      if FSelectedIndex > High(FItems) then
+        FSelectedIndex := High(FItems);
+      EnsureVisible;
+      Draw;
+    end;
+    KEY_HOME:
+    begin
+      FSelectedIndex := 0;
+      EnsureVisible;
+      Draw;
+    end;
+    KEY_END_:
+    begin
+      FSelectedIndex := High(FItems);
+      EnsureVisible;
+      Draw;
+    end;
+    KEY_ENTER:
+    begin
+      if Assigned(FItems[FSelectedIndex].OnClick) then
+        FItems[FSelectedIndex].OnClick();
+    end;
+  else
+    Result := False;
+  end;
+end;
+
+function TListBox.HitTest(ACol, ARow: Integer): Integer;
+var
+  RelRow, RelCol, ColW, C, R, Idx: Integer;
+begin
+  Result := -1;
+  if (ARow < FTop) or (ARow >= FTop + VisibleRows) then Exit;
+  if (ACol < FLeft) or (ACol >= FLeft + FWidth) then Exit;
+
+  RelRow := ARow - FTop;
+  RelCol := ACol - FLeft;
+  ColW := FWidth div FColumns;
+  C := RelCol div ColW;
+  R := FTopIndex + RelRow;
+  Idx := R * FColumns + C;
+
+  if (Idx >= 0) and (Idx <= High(FItems)) then
+    Result := Idx;
 end;
 
 { ═══════════════════════════════════════════════════════════════════════════

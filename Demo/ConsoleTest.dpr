@@ -128,48 +128,22 @@ end;
 
 function RunLayoutsContent: Word;
 var
-  I, Selected, Count: Integer;
+  I, Count: Integer;
   CCol, CRow, CW, CH: Integer;
   PreviewLeft, PreviewW, PreviewH: Integer;
-
-  procedure DrawLayoutList;
-  var
-    J: Integer;
-    Name: string;
-  begin
-    for J := 0 to Count - 1 do
-    begin
-      Name := '  ' + TLayoutRegistry.GetName(J) + '  ';
-      Con.PrintContent(1, 3 + J, StringOfChar(' ', 20));
-      Con.PrintContent(1, 3 + J, '');
-
-      if J = Selected then
-      begin
-        Con.SetColor(ccBrightWhite);
-        System.Write(ESC + '[7m');
-        Con.Print(Name);
-        System.Write(ESC + '[27m');
-      end
-      else
-      begin
-        Con.SetColor(ccGray);
-        Con.Print(Name);
-      end;
-    end;
-    Con.ResetColor;
-  end;
+  LB: TListBox;
+  ME: TMouseEvent;
+  Hit: Integer;
 
   procedure DrawLayoutPreview;
   var
     R: Integer;
     Tmp: TConsoleLayout;
   begin
-    // Clear preview area
     for R := CRow + 2 to CRow + 2 + PreviewH do
       Con.PrintAt(PreviewLeft, R, StringOfChar(' ', PreviewW + 2));
 
-    // Let the layout draw its own preview
-    Tmp := TLayoutRegistry.CreateLayout(Selected, Con);
+    Tmp := TLayoutRegistry.CreateLayout(LB.SelectedIndex, Con);
     try
       Tmp.DrawPreview(PreviewLeft, CRow + 2, PreviewW, PreviewH);
     finally
@@ -177,21 +151,23 @@ var
     end;
   end;
 
+  procedure ApplySelected;
+  begin
+    if TLayoutRegistry.GetClass(LB.SelectedIndex) = TSingleFrameLayout then
+      GLayout.BoxStyle := bsSingle
+    else
+      GLayout.BoxStyle := bsDouble;
+
+    Con.Clear;
+    GLayout.DrawFrame;
+    DrawTitle;
+  end;
+
 begin
   Con.ClearContent;
   GLayout.GetContentArea(CCol, CRow, CW, CH);
 
   Count := TLayoutRegistry.Count;
-  Selected := 0;
-
-  // Match current box style to a registered layout
-  for I := 0 to Count - 1 do
-  begin
-    if (TLayoutRegistry.GetClass(I) = TDoubleFrameLayout) and (GLayout.BoxStyle = bsDouble) then
-      Selected := I
-    else if (TLayoutRegistry.GetClass(I) = TSingleFrameLayout) and (GLayout.BoxStyle = bsSingle) then
-      Selected := I;
-  end;
 
   // Preview dimensions
   PreviewLeft := CCol + 24;
@@ -200,53 +176,64 @@ begin
   PreviewH := CH - 3;
   if PreviewH > 10 then PreviewH := 10;
 
-  Con.SetColor(ccBrightWhite);
-  Con.PrintContent(1, 1, 'Layouts (' + IntToStr(Count) + ' registered)');
-  Con.ResetColor;
+  LB := TListBox.Create(Con);
+  try
+    LB.SetBounds(CCol, CRow + 2, 22, CH - 3);
+    for I := 0 to Count - 1 do
+      LB.AddItem(TLayoutRegistry.GetName(I));
 
-  DrawLayoutList;
-  DrawLayoutPreview;
-  Con.ShowStatus(#$25B2 + '/' + #$25BC + ' select    Enter apply    ' + HINT_CONTENT);
-
-  repeat
-    Result := Con.ReadKeyCode;
-    case Result of
-      KEY_UP:
-      begin
-        if Selected > 0 then
-        begin
-          Dec(Selected);
-          DrawLayoutList;
-          DrawLayoutPreview;
-        end;
-      end;
-      KEY_DOWN:
-      begin
-        if Selected < Count - 1 then
-        begin
-          Inc(Selected);
-          DrawLayoutList;
-          DrawLayoutPreview;
-        end;
-      end;
-      KEY_ENTER:
-      begin
-        // Apply selected layout's style to the frame
-        if TLayoutRegistry.GetClass(Selected) = TSingleFrameLayout then
-          GLayout.BoxStyle := bsSingle
-        else
-          GLayout.BoxStyle := bsDouble;
-
-        Con.Clear;
-        GLayout.DrawFrame;
-        DrawTitle;
-        Result := RunLayoutsContent;
-        Exit;
-      end;
-      KEY_TAB, KEY_ESCAPE:
-        Exit;
+    // Match current box style to a registered layout
+    for I := 0 to Count - 1 do
+    begin
+      if (TLayoutRegistry.GetClass(I) = TDoubleFrameLayout) and (GLayout.BoxStyle = bsDouble) then
+        LB.SelectedIndex := I
+      else if (TLayoutRegistry.GetClass(I) = TSingleFrameLayout) and (GLayout.BoxStyle = bsSingle) then
+        LB.SelectedIndex := I;
     end;
-  until False;
+
+    Con.SetColor(ccBrightWhite);
+    Con.PrintContent(1, 1, 'Layouts (' + IntToStr(Count) + ' registered)');
+    Con.ResetColor;
+
+    LB.Draw;
+    DrawLayoutPreview;
+    Con.ShowStatus(#$25B2 + '/' + #$25BC + ' select    Enter apply    ' + HINT_CONTENT);
+
+    repeat
+      Result := Con.ReadKeyCode;
+      case Result of
+        KEY_UP, KEY_DOWN, KEY_PGUP, KEY_PGDN, KEY_HOME, KEY_END_:
+        begin
+          if LB.HandleKey(Result) then
+            DrawLayoutPreview;
+        end;
+        KEY_ENTER:
+        begin
+          ApplySelected;
+          Result := RunLayoutsContent;
+          Exit;
+        end;
+        KEY_MOUSE:
+        begin
+          ME := Con.MouseEvent;
+          if ME.Pressed and (ME.Button = mbLeft) then
+          begin
+            Hit := LB.HitTest(ME.Col, ME.Row);
+            if Hit >= 0 then
+            begin
+              LB.SelectedIndex := Hit;
+              LB.Draw;
+              DrawLayoutPreview;
+            end;
+          end;
+        end;
+        KEY_TAB, KEY_ESCAPE:
+          Exit;
+      end;
+    until False;
+  finally
+    LB.Free;
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
